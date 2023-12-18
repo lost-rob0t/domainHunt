@@ -1,2 +1,92 @@
 #+title: Tasks
 
+
+* About This file
+This file is mostly just for Me (nsaspy) to run tasks from my editor, like tests/generate docs.
+
+
+* Tasks
+** Run Tests
+#+Name: Tests
+#+begin_src shell :async :results none
+testament all > test_results.txt
+dunstify "tests done" "Result:  $(tail -n 1 test_results.txt)"
+#+end_src
+
+** Bump Version
+#+begin_src shell :results none :tangle semver.sh :session semver
+#!/usr/bin/env sh
+
+current_version=$(grep -oP 'version\s*=\s*"\K[0-9]+\.[0-9]+\.[0-9]+' starintel_doc.nimble)
+new_version="Nil"
+speak() {
+    sed -i "s/version\s*=\s*\"$current_version\"/version = \"$new_version\"/" starintel_doc.nimble
+    dunstify "Star Intel" "Version bumped from $current_version to $new_version"
+}
+
+bumpMajor() {
+    new_version=$(awk -F. -v OFS=. '{$1=$1+1; print}' <<< "$current_version")
+    speak
+}
+
+bumpMinor() {
+    new_version=$(awk -F. -v OFS=. '{$2=$2+1; print}' <<< "$current_version")
+    speak
+}
+
+bumpPatch() {
+    new_version=$(awk -F. -v OFS=. '{$3=$3+1; print}' <<< "$current_version")
+    speak
+}
+
+# Case switches for command-line arguments
+case "$1" in
+    major)
+        bumpMajor
+        ;;
+    minor)
+        bumpMinor
+        ;;
+    patch)
+        bumpPatch
+        ;;
+    *)
+        echo "Usage: $0 {major|minor|patch}"
+        exit 1
+        ;;
+esac
+#+end_src
+
+#+Name: Bump Patch Version
+#+begin_src shell :results none
+bash ./semver.sh patch
+#+end_src
+
+#+Name: Bump Minor Version
+#+begin_src shell :results none
+bash ./semver.sh minor
+#+end_src
+
+#+Name: Bump Major Version
+#+begin_src shell :results none
+bash ./semver.sh major
+#+end_src
+** Nimble
+#+Name: Nimble build
+#+begin_src shell :async :results none
+nimble build
+#+end_src
+
+#+Name: Nimble build
+#+begin_src shell :async :results output replace
+nimble install
+#+end_src
+
+#+RESULTS: Nimble build
+
+
+#+Name: Nimble Install Deps
+#+begin_src emacs-lisp :results none
+(let ((package (read-string "Nim package to install? ")))
+  (async-start-process "nimble" (executable-find "nimble") (lambda (n) (shell-command-to-string "dunstify nimble 'nimble has fnished installing'")) "install" package))
+#+end_src
