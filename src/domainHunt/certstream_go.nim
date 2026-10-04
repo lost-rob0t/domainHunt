@@ -1,111 +1,35 @@
 import ws
-import starintel_doc, starRouter
-import jsony
-import resources
-import httpclient, asyncdispatch
-import regex
-import times
-import strutils
+import starRouter
+import std/[json, asyncdispatch, options]
+import ./documents
+export documents
 
-type
-  Certstream* = ref object
-    scans*: seq[ScanInput]
-  Subject = ref object
-    C: string
-    CN: string
-    L: string
-    O: string
-    OU: string
-    ST: string
-    aggregated: string
-    email_address: string
+type Certstream* = ref object
+  scans*: seq[ScanInput]
 
-  Issuer = ref object
-    C: string
-    CN: string
-    L: string
-    O: string
-    OU: string
-    ST: string
-    aggregated: string
-    email_address: string
+proc parseDomains*(data: string, dataset = ""): seq[JsonNode] =
+  let observation = parseJson(data)
+  if observation.kind != JObject: raise newException(ValueError, "certificate observation must be an object")
+  if observation.hasKey("message_type") and observation["message_type"].getStr() == "heartbeat": return
+  let names = observation["data"]["leaf_cert"]["all_domains"]
+  if names.kind != JArray: raise newException(ValueError, "all_domains must be an array")
+  for entry in names:
+    if entry.kind != JString: raise newException(ValueError, "certificate domain must be a string")
+    result.add(domainDocument(entry.getStr(), dataset, data, observation))
 
-  Extensions = ref object
-    authorityInfoAccess: string
-    authorityKeyIdentifier: string
-    basicConstraints: string
-    keyUsage: string
-    subjectAltName: string
-    subjectKeyIdentifier: string
-
-  LeafCert = ref object
-    all_domains: seq[string]
-    extensions: Extensions
-    fingerprint: string
-    sha1: string
-    sha256: string
-    not_after: int
-    not_before: int
-    serial_number: string
-    signature_algorithm: string
-    subject: Subject
-    issuer: Issuer
-    is_ca: bool
-
-  CertData = ref object
-    cert_index: int
-    cert_link: string
-    leaf_cert: LeafCert
-    seen: float
-    source: Source
-    update_type: string
-
-  Source = ref object
-    name: string
-    url: string
-
-  X509LogEntry = ref object
-    data: CertData
-    message_type: string
-
-
-
-
-proc parseDomains*(data: string): seq[Domain] =
-  let certData = data.fromJson(X509LogEntry)
-  for entry in certData.data.leaf_cert.all_domains:
-    var domain = newDomain(entry, "", "", "cert-stream")
-    domain.addSource("cert-stream")
-    result.add(domain)
-
-proc certStream*(wss: WebSocket, routerClient: Client, certstream: Certstream, pingTime: int = 30) {.async.} =
-
+proc certStream*(wss: WebSocket, routerClient: Client, certstream: Certstream, pingTime = 30) {.async.} =
   let data = await wss.receiveStrPacket()
-  if data.startsWith("{"):
-    let domains = data.parseDomains()
-    for data in domains:
-      # TODO Logging
-      for scan in certstream.scans:
-        if scan.scope.contains(data):
-          when defined(verbose):
-            echo "Found Domain: ", data.record
-          data.dataset = scan.target.dataset
-          data.timestamp
-          let message =  proto.newMessage(data, proto.newDocument, routerClient.id, data.dtype)
-          await routerClient.emit(message)
-
-
-when isMainModule:
-  proc testLoop() {.async.} =
-    var wss = await newWebSocket("ws://10.50.50.221:8080/")
-    var router = newClient("certstream", "tcp://127.0.0.1:6000", "tcp://127.0.0.1:6001", 5,@[])
-    var scope = newScope("test aws", "This is a test for aws")
-    scope.inScopeAdd(".*")
-    echo scope.toJson
-    await router.connect()
-    await certStream(wss, router, CertStream(scans: @[newScan("test", "amazonaws.com", "certstream", scope)]))
-
-  import jsony
-  var hs = newHttpClient()
-  while true:
-    waitFor testLoop()
+  # WebSocket Ping/Pong control packets yield an empty text result.
+  if data.len == 0: return
+  let domains = parseDomains(data)
+  var outgoing: seq[JsonNode]
+  for domain in domains:
+    for scan in certstream.scans:
+      if scan.matches(domain["name"].getStr()):
+        var document = domain.copy()
+        document["dataset"] = %scan.target.dataset
+        document["extensions"] = %*{"domainHunt": {"targetId": string(scan.target.id), "scope": scan.target.options.get()["scope"]}}
+        outgoing.add(checked(document))
+  # Complete observation/configuration validation precedes every publication.
+  for document in outgoing:
+    await routerClient.emit(proto.newMessage(document, proto.newDocument, routerClient.id, "domain"))
