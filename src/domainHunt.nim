@@ -1,7 +1,7 @@
 import starRouter
 import starintel_doc except Message
 import std/options
-import domainHunt/[resources, crt, certstream_go]
+import domainHunt/[resources, crt, certstream_go, transport]
 import cligen
 import ws
 import json
@@ -40,14 +40,14 @@ proc certstreamMainloop(routerClient: Client, wss: WebSocket, wssAddr: string) {
       await certStream(wss, routerClient, certstream, 10)
     except Exception as error:
       echo "Certificate stream error: ", error.msg
-      wss = await newWebSocket(wssAddr)
+      wss = await openWebSocket(wssAddr)
 
 proc main(mode: string = "certstream", apiAddress: string = "tcp://127.0.0.1:6001", subAddress: string = "tcp://127.0.0.1:6000", webSocketAddr: string = "ws://127.0.0.1:8080/") =
   case mode:
     of "certstream":
       try:
         echo "Connecting..."
-        var wss = waitFor newWebSocket(webSocketAddr)
+        var wss = waitFor openWebSocket(webSocketAddr)
         echo "Connecting..."
         var client = newClient(mode, subAddress, apiAddress, 5, @[])
         waitFor client.connect

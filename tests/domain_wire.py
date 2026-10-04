@@ -2,6 +2,8 @@
 import asyncio
 import hashlib
 import json
+import os
+import ssl
 from pathlib import Path
 import queue
 import select
@@ -15,6 +17,17 @@ import zmq
 from websockets.asyncio.server import serve
 
 binary=str(Path(sys.argv[1]).resolve());broker_binary=str(Path(sys.argv[2]).resolve())
+tls='--tls' in sys.argv or '--tls-untrusted' in sys.argv
+transport_directory=tempfile.TemporaryDirectory()
+certificate=Path(transport_directory.name)/'certificate.pem'
+private_key=Path(transport_directory.name)/'private-key.pem'
+ssl_context=None
+if tls:
+    subprocess.run(['openssl','req','-x509','-newkey','rsa:2048','-nodes','-days','1',
+                    '-keyout',str(private_key),'-out',str(certificate),'-subj','/CN=127.0.0.1',
+                    '-addext','subjectAltName=IP:127.0.0.1'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+    ssl_context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ssl_context.load_cert_chain(certificate,private_key)
 deliveries=[];websocket_errors=[]
 packets=queue.Queue();server_ready=threading.Event();server_stop=threading.Event();endpoint={}
 async def connection(websocket):
@@ -29,8 +42,8 @@ async def connection(websocket):
             await asyncio.sleep(.6)
     except Exception as error:websocket_errors.append(str(error))
 async def websocket_server():
-    async with serve(connection,'127.0.0.1',0) as server:
-        endpoint['url']=f'ws://127.0.0.1:{server.sockets[0].getsockname()[1]}/'
+    async with serve(connection,'127.0.0.1',0,ssl=ssl_context) as server:
+        endpoint['url']=f'{"wss" if tls else "ws"}://127.0.0.1:{server.sockets[0].getsockname()[1]}/'
         server_ready.set()
         while not server_stop.is_set():await asyncio.sleep(.05)
 thread=threading.Thread(target=lambda:asyncio.run(websocket_server()),daemon=True);thread.start()
@@ -59,9 +72,17 @@ try:
                                 str(event).encode(),topic,json.dumps(value).encode()])
             return api.recv_multipart()
         assert send(7,'',b'test')==[b'1']
+        actor_env=os.environ.copy()
+        if tls and '--tls-untrusted' not in sys.argv:actor_env['SSL_CERT_FILE']=str(certificate)
         actor=subprocess.Popen([binary,'--apiAddress='+api_address,'--subAddress='+pub_address,'--webSocketAddr='+endpoint['url']],
-                               stdout=subprocess.PIPE,stderr=subprocess.PIPE,cwd=directory,bufsize=0)
+                               stdout=subprocess.PIPE,stderr=subprocess.PIPE,cwd=directory,bufsize=0,env=actor_env)
         processes.append(actor)
+        if '--tls-untrusted' in sys.argv:
+            out,error=actor.communicate(timeout=15)
+            assert actor.returncode!=0 and b'connected....' not in out,(out,error)
+            assert b'certificate verify failed' in error or b'No SSL/TLS CA certificates' in error,error
+            print('untrusted secure WebSocket certificate rejected PASS')
+            sys.exit(0)
         deadline=time.monotonic()+15
         while True:
             ready,_,_=select.select([actor.stdout],[],[],max(0,deadline-time.monotonic()))
@@ -103,7 +124,7 @@ try:
         assert send(8,{**target,'schemaVersion':'0.10.2'})==[b'2']
     print('actual installed DomainHunt: generated Scope/Target, real WebSocket/ZeroMQ, include/exclude precedence, stable identity, exact raw evidence, invalid configuration and observation rejection PASS')
 finally:
-    failed=sys.exc_info()[0] is not None
+    failed=sys.exc_info()[0] is not None and not (isinstance(sys.exc_info()[1],SystemExit) and sys.exc_info()[1].code==0)
     if failed:print({"deliveries":deliveries,"websocketErrors":websocket_errors},file=sys.stderr)
     for process in reversed(processes):
         stop(process)
@@ -112,3 +133,4 @@ finally:
             if process.stderr is not None:print(process.stderr.read().decode()[-4000:],file=sys.stderr)
     api.close(linger=0);subscriber.close(linger=0);context.term()
     server_stop.set();thread.join(timeout=5)
+    transport_directory.cleanup()

@@ -17,7 +17,7 @@
         pname = "domainHunt";
         version = "0.1.0";
         src = self;
-        nativeBuildInputs = [ pkgs.nim python pkgs.makeWrapper ];
+        nativeBuildInputs = [ pkgs.nim python pkgs.makeWrapper pkgs.openssl ];
         buildInputs = [ pkgs.openssl ];
         buildPhase = ''
           # Nim 2.2.12 otherwise gives pkg/random and std/random the same C name.
@@ -36,7 +36,10 @@
           python scripts/sync-starintel-schema.py --offline
           python scripts/check-runtime-release.py ${starintel-doc} ${star-router}
           export LD_LIBRARY_PATH=${libraries}
+          export SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
           python tests/domain_wire.py "$PWD/domainHunt" ${star-router.packages.${system}.default}/bin/starRouter
+          python tests/domain_wire.py "$PWD/domainHunt" ${star-router.packages.${system}.default}/bin/starRouter --tls
+          python tests/domain_wire.py "$PWD/domainHunt" ${star-router.packages.${system}.default}/bin/starRouter --tls-untrusted
         '';
         installPhase = ''
           mkdir -p "$out/bin"
@@ -46,6 +49,8 @@
         '';
         installCheckPhase = ''
           python tests/domain_wire.py "$out/bin/domainHunt" ${star-router.packages.${system}.default}/bin/starRouter
+          python tests/domain_wire.py "$out/bin/domainHunt" ${star-router.packages.${system}.default}/bin/starRouter --tls
+          python tests/domain_wire.py "$out/bin/domainHunt" ${star-router.packages.${system}.default}/bin/starRouter --tls-untrusted
         '';
       };
     in {
