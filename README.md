@@ -8,12 +8,19 @@ DomainHunt consumes certificate observations over WebSocket and publishes matchi
 python3 scripts/sync-starintel-schema.py
 nix flake check -L
 nix build
+nix run .#default -- --help
+bash tests/flake-apps.sh
 ./result/bin/domainHunt --help
 ```
 
 The upstream check compares every vendored artifact with its recorded StarLang commit. The build also verifies every artifact against the actual Router and Nim runtime inputs. Nix checks the whole application and its installed executable against a real plain and secure WebSocket sources and a ZeroMQ broker, including matching, exclusion precedence, stable identity, complete evidence preservation, rejected scope configuration, and rejection of malformed observations before publication.
 
 ## Configure a scan
+
+The locked producer supports `x86_64-linux`. Apps `default` and `domainHunt`
+invoke the existing installed `domainHunt` executable, with its closed library
+and CA dependencies. Only `certstream` is enabled. Consumers should pin an
+immutable revision of this repository and use its package/app output.
 
 Submit a canonical Target to the `certstream` actor. `options.scope` carries a complete canonical Scope snapshot; an optional `scope` reference must identify that snapshot. This actor option transports source-defined documents and does not define another document schema.
 

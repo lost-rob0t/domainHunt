@@ -55,6 +55,10 @@
       };
     in {
       packages.${system}.default = actor;
+      apps.${system} = {
+        default = self.apps.${system}.domainHunt;
+        domainHunt = { type = "app"; program = "${actor}/bin/domainHunt"; };
+      };
       checks.${system}.default = actor;
       devShells.${system}.default = pkgs.mkShell {
         packages = [ pkgs.nim pkgs.nimble python ];
