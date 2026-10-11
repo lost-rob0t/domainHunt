@@ -1,6 +1,6 @@
 import httpclient
 import asyncdispatch
-import starintel_doc
+import ./documents
 import json, strutils, strformat
 import resources
 const CRTSH_URL = "https://crt.sh/"
@@ -20,8 +20,8 @@ proc newAsyncCrtShClient(poolSize: int): AsyncCrtShClient =
   var client = AsyncCrtShClient()
   client.pool = newAsyncHttpClientPool(poolSize)
   result = client
-proc crtsh*(client: CrtShClient or AsyncCrtShClient, domain: string): Future[seq[Domain]] {.multisync.} =
-  var domains: seq[Domain]
+proc crtsh*(client: CrtShClient or AsyncCrtShClient, domain: string): Future[seq[JsonNode]] {.multisync.} =
+  var domains: seq[JsonNode]
   client.pool.withPool():
     let url = fmt"{CRTSH_URL}/?q={domain}&output=json"
     let resp = (await resource.getContent(url)).parseJson()
@@ -31,9 +31,7 @@ proc crtsh*(client: CrtShClient or AsyncCrtShClient, domain: string): Future[seq
       let domainStr = resp["name_value"].getStr
       # TODO Make emails from this.
       if domainStr.contains("@"): continue
-      var domain = newDomain(domainStr, "",  "", "crt.sh")
-      domain.addSource("crt.sh")
-      domains.add(domain)
+      domains.add(domainDocument(domainStr, "crt.sh", $resp, resp))
   result = domains
 
 
@@ -42,4 +40,4 @@ when isMainModule:
   var client = newCrtShClient(10)
   let domains = client.crtsh("google.com")
   for domain in domains:
-    echo domain.record
+    echo domain["name"].getStr()

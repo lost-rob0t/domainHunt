@@ -1,6 +1,7 @@
 import starRouter
-import starintel_doc
-import domainHunt/[resources, crt, certstream_go]
+import starintel_doc except Message
+import std/options
+import domainHunt/[resources, crt, certstream_go, transport]
 import cligen
 import ws
 import json
@@ -11,18 +12,21 @@ proc certshFilter(doc: proto.Message[Target]): bool =
   doc.data.actor == "certsh"
 
 proc certstreamFilter(doc: proto.Message[Target]): bool =
-  doc.data.actor == "certstream" and len(doc.data.options) > 0
+  doc.data.actor == "certstream" and doc.data.options.isSome
 
 
 proc certstreamMainloop(routerClient: Client, wss: WebSocket, wssAddr: string) {.async.} =
   var
-    certstream = CertStream()
+    certstream = CertStream(scans: @[])
     inbox = Target.newInbox(100)
     wss = wss
   inbox.registerFilter(certstreamFilter)
   proc handleTarget(doc: proto.Message[Target]) {.async.} =
-    let scanInput = ScanInput(target: doc.data, scope: doc.data.options.to(Scope))
-    certstream.scans.add(scanInput)
+    try:
+      let scan = configureScan(doc.data)
+      certstream.scans.add(scan)
+    except ValueError as error:
+      echo "Invalid scope configuration: ", error.msg
     when defined(verbose):
       echo "got target: ", doc.data.target
   inbox.registerCB(handleTarget)
@@ -34,20 +38,21 @@ proc certstreamMainloop(routerClient: Client, wss: WebSocket, wssAddr: string) {
       nextPing = timeNow + 10
     try:
       await certStream(wss, routerClient, certstream, 10)
-    except Exception:
-      echo "error!"
-      wss = await newWebSocket(wssAddr)
+    except Exception as error:
+      echo "Certificate stream error: ", error.msg
+      wss = await openWebSocket(wssAddr)
 
 proc main(mode: string = "certstream", apiAddress: string = "tcp://127.0.0.1:6001", subAddress: string = "tcp://127.0.0.1:6000", webSocketAddr: string = "ws://127.0.0.1:8080/") =
   case mode:
     of "certstream":
       try:
         echo "Connecting..."
-        var wss = waitFor newWebSocket(webSocketAddr)
+        var wss = waitFor openWebSocket(webSocketAddr)
         echo "Connecting..."
         var client = newClient(mode, subAddress, apiAddress, 5, @[])
         waitFor client.connect
         echo "connected...."
+        stdout.flushFile()
         waitFor certstreamMainloop(client, wss, webSocketAddr)
       except OsError:
         echo "Could not connect to websocket or message router, please check connection."
@@ -56,4 +61,5 @@ proc main(mode: string = "certstream", apiAddress: string = "tcp://127.0.0.1:600
       echo "Not supported mode!"
       quit(1)
 
-dispatch(main)
+when isMainModule:
+  dispatch(main)
